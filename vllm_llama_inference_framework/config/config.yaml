@@ -1,0 +1,246 @@
+# 云边端推理框架配置
+
+# 边端配置
+edge:
+  # 模型配置
+  model:
+    path: "models/llama-7b-q4.gguf"  # llama.cpp 模型路径
+    context_length: 2048
+    gpu_layers: 0  # 0 表示只使用 CPU
+  
+  # 服务器配置
+  server:
+    host: "localhost"
+    port: 8080
+    workers: 1
+  
+  # F1: 置信度判断配置
+  confidence:
+    strategy: "max_prob"  # max_prob, entropy, temperature, top_k_agg
+    threshold: 0.8
+    ensemble_weights:
+      max_prob: 0.4
+      entropy: 0.3
+      top_k_agg: 0.3
+    
+    # 消融实验配置
+    ablation:
+      disable_entropy: false
+      disable_normalization: false
+  
+  # F3: KV Cache 配置 (llama.cpp)
+  kv_cache:
+    enabled: true
+    max_size: 1000  # 缓存条目数
+    max_seq_len: 2048
+    enable_compression: false
+    
+    # 消融实验配置
+    ablation:
+      disable_lru: false
+      disable_prefix_match: false
+  
+  # 日志配置
+  logging:
+    level: "INFO"
+    file: "logs/edge.log"
+
+
+# 云端配置
+cloud:
+  # 模型配置
+  model:
+    path: "models/vllm-llama-13b"  # vLLM 模型路径
+    tensor_parallel_size: 1
+    gpu_memory_utilization: 0.9
+    max_model_len: 4096
+  
+  # 服务器配置
+  server:
+    host: "localhost"
+    port: 8081
+    workers: 4  # vLLM 可以并行处理
+  
+  # F2: Draft 验证配置
+  draft_verifier:
+    acceptance_threshold: 0.8  # Draft 接受阈值
+    max_verify_tokens: 64
+    temperature: 0.0  # 验证时使用贪心解码
+    
+    # 批处理配置
+    batch:
+      enabled: true
+      max_batch_size: 16
+      timeout_ms: 10
+  
+  # F3: KV Cache 配置 (vLLM)
+  kv_cache:
+    enabled: true
+    max_blocks: 10000
+    block_size: 16
+    max_seq_len: 4096
+    enable_prefix_caching: true
+    enable_compression: false
+    
+    # 消融实验配置
+    ablation:
+      disable_prefix_caching: false
+      disable_lru: false
+  
+  # 日志配置
+  logging:
+    level: "INFO"
+    file: "logs/cloud.log"
+
+
+# F4: HTTP 通信配置
+communication:
+  # 边端端点
+  edge_endpoint: "http://localhost:8080"
+  
+  # 云端端点
+  cloud_endpoint: "http://localhost:8081"
+  
+  # HTTP 客户端配置
+  http_client:
+    timeout: 30.0  # 秒
+    max_retries: 3
+    retry_delay: 1.0
+    connection_pool_size: 50
+  
+  # 批处理配置
+  batching:
+    enabled: true
+    max_batch_size: 32
+    batch_timeout_ms: 5
+
+
+# 推理配置
+inference:
+  # 默认参数
+  defaults:
+    max_tokens: 128
+    temperature: 0.8
+    top_p: 0.95
+    top_k: 50
+  
+  # 功能开关
+  features:
+    use_draft_verify: true      # F2: 启用 Draft-Verify
+    use_confidence_check: true  # F1: 启用置信度判断
+    use_kv_cache: true          # F3: 启用 KV Cache
+    use_http_communication: true # F4: 启用 HTTP 通信
+  
+  # 消融实验配置
+  ablation:
+    # 可以单独禁用某个功能进行消融实验
+    disable_f1: false  # 禁用置信度判断
+    disable_f2: false  # 禁用 Draft-Verify
+    disable_f3: false  # 禁用 KV Cache
+    disable_f4: false  # 禁用 HTTP 通信 (使用本地调用)
+
+
+# 监控和日志
+monitoring:
+  # 性能监控
+  performance:
+    enabled: true
+    metrics_file: "logs/metrics.json"
+    log_interval: 60  # 秒
+  
+  # 日志配置
+  logging:
+    enabled: true
+    log_dir: "logs"
+    log_level: "INFO"
+    max_file_size: "100MB"
+    backup_count: 5
+  
+  # Prometheus 监控 (可选)
+  prometheus:
+    enabled: false
+    port: 9090
+    metrics_path: "/metrics"
+
+
+# 实验配置
+experiments:
+  # 基准实验
+  baseline:
+    name: "baseline"
+    description: "所有功能启用的基准配置"
+    config_overrides: {}
+  
+  # 消融实验列表
+  ablations:
+    # 实验1: 禁用置信度判断
+    - name: "no_confidence"
+      description: "禁用置信度判断"
+      config_overrides:
+        inference:
+          features:
+            use_confidence_check: false
+    
+    # 实验2: 禁用 Draft-Verify
+    - name: "no_draft_verify"
+      description: "禁用 Draft-Verify"
+      config_overrides:
+        inference:
+          features:
+            use_draft_verify: false
+    
+    # 实验3: 禁用 KV Cache
+    - name: "no_kv_cache"
+      description: "禁用 KV Cache"
+      config_overrides:
+        edge:
+          kv_cache:
+            enabled: false
+        cloud:
+          kv_cache:
+            enabled: false
+    
+    # 实验4: 禁用 HTTP 通信 (本地模拟)
+    - name: "no_http"
+      description: "禁用 HTTP 通信"
+      config_overrides:
+        inference:
+          features:
+            use_http_communication: false
+    
+    # 实验5: 只使用边端
+    - name: "edge_only"
+      description: "只使用边端"
+      config_overrides:
+        inference:
+          features:
+            use_draft_verify: false
+            use_confidence_check: false
+    
+    # 实验6: 只使用云端
+    - name: "cloud_only"
+      description: "只使用云端"
+      config_overrides:
+        inference:
+          features:
+            use_draft_verify: false
+            use_confidence_check: false
+
+
+# 测试配置
+testing:
+  # 测试数据集
+  datasets:
+    - name: "alpaca"
+      path: "data/alpaca.json"
+      size: 1000
+    
+    - name: "custom"
+      path: "data/custom.json"
+      size: 100
+  
+  # 测试配置
+  config:
+    num_samples: 100
+    warmup_samples: 10
+    output_file: "results/test_results.json"
