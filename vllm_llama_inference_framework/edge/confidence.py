@@ -3,7 +3,9 @@ F1: 置信度判断逻辑
 支持多种置信度计算策略，模块化设计便于消融实验
 """
 import math
-from typing import List, Tuple
+# ==================== 修改点: 补全 Dict, Any, Optional ====================
+from typing import List, Tuple, Dict, Any, Optional
+# ========================================================================
 import numpy as np
 from common.types import (
     TokenProb, 
@@ -42,7 +44,7 @@ class ConfidenceCalculator:
         
         # 提取概率值
         probs = [tp.prob for tp in token_probs]
-        logprobs = [tp.logprob for tp in token_probs]
+        # logprobs = [tp.logprob for tp in token_probs] # 暂时未使用
         
         # 计算基本统计
         max_prob = max(probs)

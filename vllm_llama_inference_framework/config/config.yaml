@@ -4,7 +4,7 @@
 edge:
   # 模型配置
   model:
-    path: "models/llama-7b-q4.gguf"  # llama.cpp 模型路径
+    path: "/home/user1/vllm_llama_inference_framework/models/edge/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
     context_length: 2048
     gpu_layers: 0  # 0 表示只使用 CPU
   
@@ -50,10 +50,10 @@ edge:
 cloud:
   # 模型配置
   model:
-    path: "models/vllm-llama-13b"  # vLLM 模型路径
-    tensor_parallel_size: 1
-    gpu_memory_utilization: 0.9
-    max_model_len: 4096
+    path: "/home/user1/vllm_llama_inference_framework/models/cloud/TinyLlama-1.1B-Chat-v1.0"  # vLLM 模型路径
+    tensor_parallel_size: 4
+    gpu_memory_utilization: 0.6
+    max_model_len: 2048
   
   # 服务器配置
   server:

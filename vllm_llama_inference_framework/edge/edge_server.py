@@ -3,7 +3,9 @@
 """
 import asyncio
 import json
-from typing import Dict, Any, Optional
+# ==================== 修复点: 补全所有必要的类型导入 ====================
+from typing import Dict, Any, Optional, List, Tuple
+# ======================================================================
 import aiohttp
 from aiohttp import web
 
@@ -27,7 +29,11 @@ class EdgeServer:
         cloud_endpoint: str = "http://localhost:8081"
     ):
         self.config = config
-        self.cloud_endpoint = cloud_endpoint
+        # 优先从配置中读取 cloud_endpoint
+        if 'communication' in config:
+            self.cloud_endpoint = config['communication'].get('cloud_endpoint', cloud_endpoint)
+        else:
+            self.cloud_endpoint = cloud_endpoint
         
         # 初始化组件
         self.confidence_calculator = ConfidenceCalculator(
@@ -36,10 +42,30 @@ class EdgeServer:
         self.kv_cache = LlamaCppKVCache(
             max_size=config.get('kv_cache_size', 1000)
         )
+        
+        # ==================== 之前的修复: 正确解析嵌套的 model path ====================
+        model_config = config.get('model', {})
+        target_path = None
+        
+        # 1. 尝试从 config['model']['path'] 读取
+        if isinstance(model_config, dict):
+            target_path = model_config.get('path')
+            
+        # 2. 尝试从 config['model_path'] 读取 (兼容旧逻辑)
+        if not target_path:
+            target_path = config.get('model_path')
+            
+        # 3. 默认值
+        if not target_path:
+            target_path = 'models/llama-7b-q4.gguf'
+            
+        print(f"[EdgeServer] 读取到的模型路径: {target_path}")
+        
         self.draft_generator = DraftGenerator(
-            model_path=config.get('model_path', 'models/llama-7b-q4.gguf'),
+            model_path=target_path,
             confidence_calculator=self.confidence_calculator
         )
+        # ========================================================================
         
         # HTTP 客户端会话
         self.session: Optional[aiohttp.ClientSession] = None
@@ -47,7 +73,7 @@ class EdgeServer:
     async def start(self):
         """启动边端服务器"""
         self.session = aiohttp.ClientSession()
-        print(f"[Edge] 边端服务器启动，配置: {self.config}")
+        print(f"[Edge] 边端服务器组件已初始化")
     
     async def stop(self):
         """停止边端服务器"""
@@ -58,20 +84,12 @@ class EdgeServer:
         self, 
         request_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        处理 Draft 生成请求
-        
-        Args:
-            request_data: 请求数据
-            
-        Returns:
-            DraftResponse 的字典表示
-        """
+        """处理 Draft 生成请求"""
         try:
             # 解析请求
             draft_request = DraftRequest(**request_data)
             
-            print(f"[Edge] 收到 Draft 请求: prompt='{draft_request.prompt[:50]}...'")
+            print(f"[Edge] 收到 Draft 请求: prompt='{draft_request.prompt[:30]}...'")
             
             # 生成 Draft
             draft_response = await self.draft_generator.generate_draft(draft_request)
@@ -80,7 +98,7 @@ class EdgeServer:
             confidence_report = self.confidence_calculator.get_confidence_report(
                 draft_response.confidence
             )
-            print(f"[Edge] {confidence_report}")
+            # print(f"[Edge] {confidence_report}") # 减少刷屏
             
             # 返回响应
             return {
@@ -90,6 +108,8 @@ class EdgeServer:
             
         except Exception as e:
             print(f"[Edge] Draft 生成错误: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 'type': 'error',
                 'message': str(e)
@@ -110,15 +130,7 @@ class EdgeServer:
         self, 
         inference_request: InferenceRequest
     ) -> Dict[str, Any]:
-        """
-        处理完整推理流程
-        
-        Args:
-            inference_request: 推理请求
-            
-        Returns:
-            推理结果
-        """
+        """处理完整推理流程"""
         start_time = asyncio.get_event_loop().time()
         
         # 1. 生成 Draft
@@ -162,6 +174,10 @@ class EdgeServer:
             }
             
             try:
+                if not self.session:
+                    self.session = aiohttp.ClientSession()
+
+                # 发送请求给 Cloud
                 async with self.session.post(
                     f"{self.cloud_endpoint}/verify",
                     json=verify_request
@@ -235,58 +251,8 @@ async def handle_inference(request):
 async def handle_cache_stats(request):
     """缓存统计处理器"""
     server = request.app['edge_server']
-    
     try:
         cache_stats = server.kv_cache.get_cache_stats()
         return web.json_response(cache_stats)
-    
     except Exception as e:
         return web.json_response({'error': str(e)}, status=500)
-
-
-async def main():
-    """主函数"""
-    # 配置
-    config = {
-        'model_path': 'models/llama-7b-q4.gguf',
-        'confidence_strategy': 'max_prob',
-        'kv_cache_size': 1000,
-        'port': 8080
-    }
-    
-    # 创建服务器
-    edge_server = EdgeServer(config)
-    await edge_server.start()
-    
-    # 创建 Web 应用
-    app = web.Application()
-    app['edge_server'] = edge_server
-    
-    # 注册路由
-    app.router.add_post('/draft', handle_request)
-    app.router.add_post('/inference', handle_inference)
-    app.router.add_get('/health', handle_request)
-    app.router.add_get('/cache/stats', handle_cache_stats)
-    
-    print(f"[Edge] 边端服务器运行在 http://localhost:{config['port']}")
-    
-    try:
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, 'localhost', config['port'])
-        await site.start()
-        
-        # 保持运行
-        while True:
-            await asyncio.sleep(1)
-    
-    except KeyboardInterrupt:
-        print("\n[Edge] 收到停止信号")
-    
-    finally:
-        await edge_server.stop()
-        await runner.cleanup()
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
