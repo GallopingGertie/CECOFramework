@@ -1,78 +1,80 @@
-#!/usr/bin/env python3
 """
-边端服务器启动脚本 (修正版：支持 Web 服务启动)
+Edge Server 启动脚本 - 修复版 (解决 Event Loop 冲突问题)
 """
-import asyncio
 import argparse
+import asyncio
 import yaml
-import sys
 import os
-
-# 确保能找到模块
-sys.path.append(os.getcwd())
-
 from aiohttp import web
+
+# 引入 EdgeServer 和所有的路由处理函数
 from edge.edge_server import (
     EdgeServer, 
     handle_request, 
     handle_inference, 
-    handle_cache_stats
+    handle_cache_stats,
+    handle_simulation_control
 )
 
-async def main():
-    parser = argparse.ArgumentParser(description="启动边端服务器")
-    parser.add_argument("--config", type=str, default="config/config.yaml", help="配置文件路径")
-    args = parser.parse_args()
-    
-    # 1. 加载配置
-    try:
-        with open(args.config, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"❌ 配置文件 {args.config} 不存在")
-        return
+def load_config(config_path):
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
 
-    # 获取 edge 部分配置
+async def on_startup(app):
+    """Web 服务启动时的钩子：此时初始化 Session"""
+    print("[System] Web服务已启动，正在初始化 Edge Server 组件...")
+    server = app['edge_server']
+    await server.start() # 在正确的 Loop 中创建 Session
+
+async def on_cleanup(app):
+    """Web 服务关闭时的钩子：清理资源"""
+    print("[System] 正在关闭 Edge Server...")
+    server = app['edge_server']
+    await server.stop()
+
+async def init_app(config_path):
+    config = load_config(config_path)
     edge_config = config.get('edge', {})
-    # 尝试从 server 字段获取端口，如果没有则用默认的
-    server_config = edge_config.get('server', {})
-    port = server_config.get('port', 8080)
     
-    print("="*40)
-    print(f"正在启动 Edge 端 (Llama.cpp)...")
+    # 1. 实例化 Server (但不调用 start)
+    server = EdgeServer(config)
     
-    # 2. 初始化核心逻辑
-    server = EdgeServer(edge_config)
-    await server.start()
-    
-    # 3. 构建 Web 应用
     app = web.Application()
     app['edge_server'] = server
     
-    # 注册路由
-    # 注意：根据 edge_server.py 里的定义，handle_request 处理了 draft 和 health
-    app.router.add_post('/draft', handle_request)
+    # 2. 注册生命周期钩子 (关键修复!)
+    app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_cleanup)
+    
+    # 3. 注册路由
+    app.router.add_post('/v1/chat/completions', handle_inference)
     app.router.add_post('/inference', handle_inference)
+    app.router.add_post('/draft', handle_request)
     app.router.add_get('/health', handle_request)
     app.router.add_get('/cache/stats', handle_cache_stats)
+    app.router.add_post('/admin/simulate', handle_simulation_control)
     
-    print(f"✅ Edge Server 启动成功! 监听端口: {port}")
-    print("="*40)
+    return app, edge_config
+
+def main():
+    parser = argparse.ArgumentParser(description="Start Edge Server")
+    parser.add_argument("--config", type=str, default="config/config.yaml", help="Path to config file")
+    args = parser.parse_args()
+
+    # 获取端口
+    config = load_config(args.config)
+    port = config.get('edge', {}).get('server', {}).get('port', 8088)
+
+    print(f"🚀 [Startup] 正在启动 Edge Server 于端口 {port}...")
     
-    # 4. 启动 HTTP 服务
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    # 5. 保持运行
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except KeyboardInterrupt:
-        print("\n正在停止 Edge 服务器...")
-        await server.stop()
-        await runner.cleanup()
+    # 修复：不再手动创建 Loop，直接通过 run_app 管理
+    # 先构建 app 工厂
+    async def app_factory():
+        app, _ = await init_app(args.config)
+        return app
+
+    # 使用 web.run_app 自动处理 Loop
+    web.run_app(app_factory(), host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

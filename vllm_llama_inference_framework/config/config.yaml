@@ -1,246 +1,132 @@
-# 云边端推理框架配置
+﻿# E:\edge_project\config\config.yaml
 
-# 边端配置
+# =========================================================
+# 1. 边端配置 (Edge - Llama.cpp)
+# =========================================================
 edge:
-  # 模型配置
+  # ⚠️ 这里修改为你实际的模型路径
   model:
-    path: "/home/user1/vllm_llama_inference_framework/models/edge/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+    path: "models/edge/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
     context_length: 2048
-    gpu_layers: 0  # 0 表示只使用 CPU
-  
-  # 服务器配置
+    gpu_layers: 0  # 0=CPU, -1=GPU
+
+  # 服务器设置
   server:
-    host: "localhost"
-    port: 8080
+    host: "0.0.0.0"
+    port: 8088
     workers: 1
-  
-  # F1: 置信度判断配置
+
+  # -------------------------------------------------------
+  # F1 决策模块参数 (大脑参数)
+  # -------------------------------------------------------
+  f1:
+    # 硬件配置（新增）
+    hardware:
+      device_type: "cpu"  # 可选: "cpu" 或 "gpu"
+      # GPU 配置（当 device_type="gpu" 时生效）
+      gpu_overload_threshold: 85.0  # GPU 使用率过载阈值（%）
+      gpu_memory_critical_mb: 1000  # GPU 显存临界值（MB）
+    
+    state_monitor:
+      state_cache_ttl_ms: 100
+      monitor_gpu: false  # 是否监控GPU（与 hardware.device_type 联动）
+      default_max_latency_ms: 5000
+
+    # 硬约束 (CPU/GPU过高或延迟要求极低时触发)
+    hard_constraints:
+      cpu_overload: 90.0
+      gpu_overload: 85.0   # 新增：GPU过载阈值
+      memory_critical: 500
+      ultra_low_latency: 50
+      weak_network_rtt: 200.0  # 阶段2: 弱网RTT阈值
+
+    # 评分权重
+    scoring_weights:
+      latency: 0.4
+      cost: 0.1
+      quality: 0.3
+
+    latency_estimates:
+      edge_only_ms: 30.0
+      cloud_direct_ms: 200.0
+      speculative_standard_ms: 80.0
+    
+    # 阶段2: 网络探测
+    enable_network_probe: true
+    network_probe_interval_ms: 5000
+    
+    # 阶段3: 历史追踪与自适应
+    enable_adaptive: true
+    enable_history_scoring: true
+    
+    history_tracker:
+      max_history_size: 100  # 滑动窗口大小
+    
+    adaptive_threshold:
+      target_acceptance_min: 0.75  # 目标接受率下限
+      target_acceptance_max: 0.85  # 目标接受率上限
+      threshold_step: 0.05         # 阈值调整步长
+      smoothing_factor: 0.1        # EMA平滑系数
+      threshold_min: 0.50          # 最小阈值
+      threshold_max: 0.95          # 最大阈值
+      initial_confidence_threshold: 0.80  # 初始置信度阈值
+      update_interval: 10          # 每10次执行更新一次
+    
+    # 默认参数
+    confidence_threshold: 0.80
+    draft_max_tokens: 64
+    default_latency_slo: 150  # 默认延迟SLO (ms)
+    
+    # 硬件感知参数调整（新增）
+    hardware_adaptive:
+      # GPU 模式参数
+      gpu_mode:
+        edge_only_max_tokens: 256      # GPU模式下EDGE_ONLY可生成更多token
+        collaborative_draft_tokens: 96  # GPU模式下协同推理draft长度
+        task_complexity_threshold: 0.7  # GPU模式下可处理的任务复杂度阈值（越低越能处理复杂任务）
+      
+      # CPU 模式参数
+      cpu_mode:
+        edge_only_max_tokens: 128      # CPU模式下EDGE_ONLY生成token较少
+        collaborative_draft_tokens: 48  # CPU模式下协同推理draft长度较短
+        task_complexity_threshold: 0.8  # CPU模式下只能处理简单任务（阈值较高）
+
+  # F1 置信度参数
   confidence:
-    strategy: "max_prob"  # max_prob, entropy, temperature, top_k_agg
+    strategy: "max_prob"
     threshold: 0.8
     ensemble_weights:
       max_prob: 0.4
       entropy: 0.3
       top_k_agg: 0.3
-    
-    # 消融实验配置
-    ablation:
-      disable_entropy: false
-      disable_normalization: false
-  
-  # F3: KV Cache 配置 (llama.cpp)
+
+  # F3 缓存
   kv_cache:
     enabled: true
-    max_size: 1000  # 缓存条目数
+    max_size: 1000
     max_seq_len: 2048
-    enable_compression: false
-    
-    # 消融实验配置
-    ablation:
-      disable_lru: false
-      disable_prefix_match: false
-  
-  # 日志配置
+
   logging:
     level: "INFO"
     file: "logs/edge.log"
 
 
-# 云端配置
-cloud:
-  # 模型配置
-  model:
-    path: "/home/user1/vllm_llama_inference_framework/models/cloud/TinyLlama-1.1B-Chat-v1.0"  # vLLM 模型路径
-    tensor_parallel_size: 4
-    gpu_memory_utilization: 0.6
-    max_model_len: 2048
-  
-  # 服务器配置
-  server:
-    host: "localhost"
-    port: 8081
-    workers: 4  # vLLM 可以并行处理
-  
-  # F2: Draft 验证配置
-  draft_verifier:
-    acceptance_threshold: 0.8  # Draft 接受阈值
-    max_verify_tokens: 64
-    temperature: 0.0  # 验证时使用贪心解码
-    
-    # 批处理配置
-    batch:
-      enabled: true
-      max_batch_size: 16
-      timeout_ms: 10
-  
-  # F3: KV Cache 配置 (vLLM)
-  kv_cache:
-    enabled: true
-    max_blocks: 10000
-    block_size: 16
-    max_seq_len: 4096
-    enable_prefix_caching: true
-    enable_compression: false
-    
-    # 消融实验配置
-    ablation:
-      disable_prefix_caching: false
-      disable_lru: false
-  
-  # 日志配置
-  logging:
-    level: "INFO"
-    file: "logs/cloud.log"
-
-
-# F4: HTTP 通信配置
+# =========================================================
+# 2. 通信配置 (连接云端)
+# =========================================================
 communication:
-  # 边端端点
-  edge_endpoint: "http://localhost:8080"
-  
-  # 云端端点
+  # 既然你有 SSH 隧道，这里必须填 localhost
   cloud_endpoint: "http://localhost:8081"
-  
-  # HTTP 客户端配置
-  http_client:
-    timeout: 30.0  # 秒
-    max_retries: 3
-    retry_delay: 1.0
-    connection_pool_size: 50
-  
-  # 批处理配置
-  batching:
-    enabled: true
-    max_batch_size: 32
-    batch_timeout_ms: 5
+  timeout: 30
+  max_retries: 3
 
 
-# 推理配置
+# =========================================================
+# 3. 全局功能开关
+# =========================================================
 inference:
-  # 默认参数
-  defaults:
-    max_tokens: 128
-    temperature: 0.8
-    top_p: 0.95
-    top_k: 50
-  
-  # 功能开关
   features:
-    use_draft_verify: true      # F2: 启用 Draft-Verify
-    use_confidence_check: true  # F1: 启用置信度判断
-    use_kv_cache: true          # F3: 启用 KV Cache
-    use_http_communication: true # F4: 启用 HTTP 通信
-  
-  # 消融实验配置
-  ablation:
-    # 可以单独禁用某个功能进行消融实验
-    disable_f1: false  # 禁用置信度判断
-    disable_f2: false  # 禁用 Draft-Verify
-    disable_f3: false  # 禁用 KV Cache
-    disable_f4: false  # 禁用 HTTP 通信 (使用本地调用)
-
-
-# 监控和日志
-monitoring:
-  # 性能监控
-  performance:
-    enabled: true
-    metrics_file: "logs/metrics.json"
-    log_interval: 60  # 秒
-  
-  # 日志配置
-  logging:
-    enabled: true
-    log_dir: "logs"
-    log_level: "INFO"
-    max_file_size: "100MB"
-    backup_count: 5
-  
-  # Prometheus 监控 (可选)
-  prometheus:
-    enabled: false
-    port: 9090
-    metrics_path: "/metrics"
-
-
-# 实验配置
-experiments:
-  # 基准实验
-  baseline:
-    name: "baseline"
-    description: "所有功能启用的基准配置"
-    config_overrides: {}
-  
-  # 消融实验列表
-  ablations:
-    # 实验1: 禁用置信度判断
-    - name: "no_confidence"
-      description: "禁用置信度判断"
-      config_overrides:
-        inference:
-          features:
-            use_confidence_check: false
-    
-    # 实验2: 禁用 Draft-Verify
-    - name: "no_draft_verify"
-      description: "禁用 Draft-Verify"
-      config_overrides:
-        inference:
-          features:
-            use_draft_verify: false
-    
-    # 实验3: 禁用 KV Cache
-    - name: "no_kv_cache"
-      description: "禁用 KV Cache"
-      config_overrides:
-        edge:
-          kv_cache:
-            enabled: false
-        cloud:
-          kv_cache:
-            enabled: false
-    
-    # 实验4: 禁用 HTTP 通信 (本地模拟)
-    - name: "no_http"
-      description: "禁用 HTTP 通信"
-      config_overrides:
-        inference:
-          features:
-            use_http_communication: false
-    
-    # 实验5: 只使用边端
-    - name: "edge_only"
-      description: "只使用边端"
-      config_overrides:
-        inference:
-          features:
-            use_draft_verify: false
-            use_confidence_check: false
-    
-    # 实验6: 只使用云端
-    - name: "cloud_only"
-      description: "只使用云端"
-      config_overrides:
-        inference:
-          features:
-            use_draft_verify: false
-            use_confidence_check: false
-
-
-# 测试配置
-testing:
-  # 测试数据集
-  datasets:
-    - name: "alpaca"
-      path: "data/alpaca.json"
-      size: 1000
-    
-    - name: "custom"
-      path: "data/custom.json"
-      size: 100
-  
-  # 测试配置
-  config:
-    num_samples: 100
-    warmup_samples: 10
-    output_file: "results/test_results.json"
+    use_draft_verify: true
+    use_confidence_check: true
+    use_kv_cache: true
+    use_http_communication: true
